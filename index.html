@@ -965,6 +965,14 @@
                 <button class="btn" onclick="openReport()">📤 导出期间报表</button>
               </div>
             </div>
+            <div class="panel">
+              <div class="panel-title"><h2>数据备份与恢复</h2><span class="pill">JSON</span></div>
+              <div class="grid">
+                <button class="btn primary" onclick="exportBackup()">⬇️ 导出全部备份</button>
+                <button class="btn" onclick="openImportBackup()">⬆️ 导入恢复文件</button>
+              </div>
+              <p class="muted" style="margin:12px 0 0;line-height:1.5">备份包含科目、流水、预算、模板、提醒、手动汇率等本地数据。导入会覆盖当前浏览器里的数据。</p>
+            </div>
           </div>
         </div>
       `;
@@ -1172,6 +1180,95 @@
       state.rates.push({ id: uid(), from: d.from, to: d.to, fromAmount: Number(d.fromAmount), toAmount: Number(d.toAmount), date: nowISO() });
       save();
       openRates();
+    }
+
+    function exportBackup() {
+      const payload = {
+        app: "Colonel's Bills",
+        backupVersion: 1,
+        exportedAt: new Date().toISOString(),
+        storageKey: STORAGE_KEY,
+        data: state
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+      link.href = url;
+      link.download = `colonels-bills-backup-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function openImportBackup() {
+      openModal("导入恢复文件", `
+        <div class="grid">
+          <p class="muted" style="margin:0;line-height:1.5">请选择之前导出的 JSON 备份文件。导入成功后，会覆盖当前浏览器中保存的全部 Colonel’s Bills 数据。</p>
+          <label>备份文件<input type="file" accept="application/json,.json" onchange="importBackupFile(event)" /></label>
+          <div id="importStatus" class="panel muted" style="display:none;white-space:pre-wrap"></div>
+        </div>
+      `);
+    }
+
+    function importBackupFile(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const status = document.getElementById("importStatus");
+      status.style.display = "block";
+      status.textContent = "正在读取备份文件...";
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(String(reader.result || ""));
+          const importedState = normalizeBackupPayload(parsed);
+          const summary = [
+            `科目：${importedState.subjects.length} 个`,
+            `流水：${importedState.transactions.length} 条`,
+            `预算：${importedState.budgets.length} 个`,
+            `模板：${importedState.templates.length} 个`
+          ].join("\n");
+          if (!confirm(`确认导入并覆盖当前本地数据？\n\n${summary}`)) {
+            status.textContent = "已取消导入。";
+            event.target.value = "";
+            return;
+          }
+          state = importedState;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          closeModal();
+          render();
+          alert("导入完成，数据已恢复。");
+        } catch (error) {
+          status.textContent = `导入失败：${error.message}`;
+          event.target.value = "";
+        }
+      };
+      reader.onerror = () => {
+        status.textContent = "导入失败：无法读取这个文件。";
+        event.target.value = "";
+      };
+      reader.readAsText(file);
+    }
+
+    function normalizeBackupPayload(payload) {
+      const data = payload?.data || payload;
+      const requiredArrays = ["subjects", "transactions", "budgets", "templates", "reminders", "rates"];
+      const missing = requiredArrays.filter(key => !Array.isArray(data?.[key]));
+      if (missing.length) throw new Error(`备份文件格式不正确，缺少 ${missing.join("、")}。`);
+      return {
+        ...structuredClone(defaultState),
+        ...data,
+        tab: "dashboard",
+        composeKind: data.composeKind || "expense",
+        subjects: data.subjects,
+        transactions: data.transactions,
+        budgets: data.budgets,
+        templates: data.templates,
+        reminders: data.reminders,
+        people: Array.isArray(data.people) ? data.people : [],
+        rates: data.rates
+      };
     }
 
     function openReport() {
